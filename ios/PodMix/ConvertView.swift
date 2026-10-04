@@ -104,11 +104,17 @@ struct ConvertView: View {
                 do {
                     let base = (job.sourceName as NSString).deletingPathExtension
                     let dest = await MainActor.run { store.exportDestination(base: base, ext: "mp3") }
-                    try MP3Encoder.encode(inputURL: job.sourceURL, outputURL: dest, bitrateKbps: kbps) { p in
-                        Task { @MainActor in
-                            store.updateJob(job.id) { $0.progress = p }
-                        }
-                    }
+                    try MP3Encoder.encode(inputURL: job.sourceURL, outputURL: dest, bitrateKbps: kbps,
+                        phase: { ph in
+                            Task { @MainActor in
+                                store.updateJob(job.id) { $0.status = ph }
+                            }
+                        },
+                        progress: { p in
+                            Task { @MainActor in
+                                store.updateJob(job.id) { $0.progress = p }
+                            }
+                        })
                     await MainActor.run {
                         store.updateJob(job.id) { $0.status = "Done"; $0.progress = 1; $0.outputURL = dest }
                     }

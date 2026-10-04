@@ -7,12 +7,17 @@ enum MP3Encoder {
 
     /// Encodes `inputURL` to MP3 at `outputURL` using CBR `bitrateKbps`.
     /// Input is resampled to 44.1 kHz stereo, the MP3-native format.
+    /// `phase` reports which stage we're in ("Reading audio…"/"Encoding MP3…")
+    /// so a stall is localizable from the UI.
     static func encode(inputURL: URL, outputURL: URL, bitrateKbps: Int,
+                       phase: @escaping (String) -> Void = { _ in },
                        progress: @escaping (Double) -> Void) throws {
+        phase("Reading audio…")
         let (leftF, rightF) = try AudioIO.readStereoFloat(url: inputURL, targetSampleRate: 44100)
         let frames = min(leftF.count, rightF.count)
         guard frames > 0 else { throw AppError.lameFailed("No audio samples in \(inputURL.lastPathComponent)") }
 
+        phase("Encoding MP3…")
         var interleaved = [Int16](repeating: 0, count: frames * 2)
         for i in 0..<frames {
             let l = Int((Double(leftF[i]) * 32767.0).rounded())
