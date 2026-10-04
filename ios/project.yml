@@ -1,0 +1,39 @@
+name: PodMix
+options:
+  bundleIdPrefix: studio.mikegyver
+settings:
+  base:
+    SWIFT_VERSION: '5.0'
+    IPHONEOS_DEPLOYMENT_TARGET: '17.0'
+    TARGETED_DEVICE_FAMILY: '1'
+    MARKETING_VERSION: '1.0.0'
+    CURRENT_PROJECT_VERSION: '1'
+targets:
+  PodMix:
+    type: application
+    platform: iOS
+    sources:
+      - path: PodMix
+        excludes:
+          - Info.plist
+      # Vendored LAME 3.100 encoder (libmp3lame). Compiled straight into the
+      # app target; config.h comes from HAVE_CONFIG_H + HEADER_SEARCH_PATHS.
+      - path: ../vendor/lame/src
+        excludes:
+          - "i386/**"
+          - "vector/**"
+          - "*.rc"
+          - "*.ico"
+          - "Makefile*"
+          - depcomp
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: studio.mikegyver.podmix
+        INFOPLIST_FILE: PodMix/Info.plist
+        GENERATE_INFOPLIST_FILE: NO
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        TARGETED_DEVICE_FAMILY: '1,2'
+        CODE_SIGN_STYLE: Automatic
+        SWIFT_OBJC_BRIDGING_HEADER: PodMix/PodMix-Bridging-Header.h
+        HEADER_SEARCH_PATHS: $(SRCROOT)/../vendor/lame/include $(SRCROOT)/../vendor/lame $(inherited)
+        GCC_PREPROCESSOR_DEFINITIONS: HAVE_CONFIG_H=1 $(inherited)
