@@ -4,135 +4,77 @@ import AVFoundation
 /// 48 kHz stereo float for processing; callers pick their own rate.
 enum AudioIO {
 
-    /// Reads any audio file (or the audio track of a video) as stereo float.
+    /// Reads any audio file (or the audio track of a video) as stereo float
+    /// at `targetSampleRate`, via AVAssetReader.
     ///
-    /// Two paths:
-    /// - Fast path: the file is already stereo at the target rate — read
-    ///   straight from disk with no converter involved.
-    /// - Converter path: AVAudioConverter for anything else, with a stall
-    ///   guard. The converter's input block can report "no data now"
-    ///   indefinitely; without the guard the `while true` loop below would
-    ///   spin forever showing "Converting…" and never failing. That exact
-    ///   hang bit PodMix v1.0.0's WAV→MP3 on real hardware.
-    static func readStereoFloat(url: URL, targetSampleRate: Double = 48000) throws -> (left: [Float], right: [Float]) {
-        let file: AVAudioFile
+    /// v1.0.2: replaced the AVAudioFile + AVAudioConverter implementation.
+    /// AVAudioFile.read(into:) throws a bare `Foundation._GenericObjCError
+    /// error 0` on some of Mike's WAV masters (most likely 24-bit, a layout
+    /// AVAudioPCMBuffer cannot represent), and the converter's input block
+    /// could report "no data now" forever (v1.0.0's silent hang, v1.0.1's
+    /// "Read failed"). AVAssetReader decodes any source format — WAV at any
+    /// bit depth, MP3, AAC/M4A, MP4 audio — straight to float PCM, with none
+    /// of those traps.
+    static func readStereoFloat(url: URL, targetSampleRate: Double = 48000) async throws -> (left: [Float], right: [Float]) {
+        let asset = AVURLAsset(url: url)
+        guard let track = try await asset.loadTracks(withMediaType: .audio).first else {
+            throw AppError.fileError("No audio track in \(url.lastPathComponent)")
+        }
+        let reader: AVAssetReader
         do {
-            file = try AVAudioFile(forReading: url)
+            reader = try AVAssetReader(asset: asset)
         } catch {
-            throw AppError.fileError("Could not open \(url.lastPathComponent): \(error.localizedDescription)")
+            throw AppError.fileError("Could not read \(url.lastPathComponent): \(error.localizedDescription)")
         }
-
-        let src = file.processingFormat
-        if src.sampleRate == targetSampleRate && src.channelCount == 2 &&
-            (src.commonFormat == .pcmFormatFloat32 || src.commonFormat == .pcmFormatInt16) {
-            return try readDirect(file: file)
-        }
-
-        guard let target = AVAudioFormat(commonFormat: .pcmFormatFloat32,
-                                        sampleRate: targetSampleRate,
-                                        channels: 2,
-                                        interleaved: false) else {
-            throw AppError.fileError("Could not make target format")
-        }
-        guard let converter = AVAudioConverter(from: src, to: target) else {
-            throw AppError.fileError("Could not make sample-rate converter")
+        let settings: [String: Any] = [
+            AVFormatIDKey: kAudioFormatLinearPCM,
+            AVSampleRateKey: targetSampleRate,
+            AVNumberOfChannelsKey: 2,
+            AVLinearPCMBitDepthKey: 32,
+            AVLinearPCMIsFloatKey: true,
+            AVLinearPCMIsBigEndianKey: false,
+            AVLinearPCMIsNonInterleaved: false
+        ]
+        let output = AVAssetReaderTrackOutput(track: track, outputSettings: settings)
+        reader.add(output)
+        guard reader.startReading() else {
+            throw AppError.fileError("Could not read \(url.lastPathComponent): \(reader.error?.localizedDescription ?? "unknown error")")
         }
 
         var left = [Float]()
         var right = [Float]()
-        let estimate = Int(Double(file.length) * targetSampleRate / max(1, src.sampleRate)) + 1024
-        left.reserveCapacity(estimate)
-        right.reserveCapacity(estimate)
-
-        // A read failure inside the block can't throw (the block isn't
-        // throwing), so capture it and rethrow after convert() returns.
-        // Signalling endOfStream here guarantees the loop below terminates.
-        var inputError: Error?
-        let inputBlock: AVAudioConverterInputBlock = { _, outStatus in
-            if inputError != nil {
-                outStatus.pointee = .endOfStream
-                return nil
-            }
-            guard let buf = AVAudioPCMBuffer(pcmFormat: src, frameCapacity: 4096) else {
-                outStatus.pointee = .noDataNow
-                return nil
-            }
-            do {
-                try file.read(into: buf)
-            } catch {
-                inputError = error
-                outStatus.pointee = .endOfStream
-                return nil
-            }
-            if buf.frameLength == 0 {
-                outStatus.pointee = .endOfStream
-                return nil
-            }
-            outStatus.pointee = .haveData
-            return buf
+        if let duration = try? await asset.load(.duration),
+           duration.seconds.isFinite, duration.seconds > 0 {
+            let est = Int(duration.seconds * targetSampleRate) + 1024
+            left.reserveCapacity(est)
+            right.reserveCapacity(est)
         }
 
-        var emptyRuns = 0
-        while true {
-            guard let outBuf = AVAudioPCMBuffer(pcmFormat: target, frameCapacity: 8192) else {
-                throw AppError.fileError("Could not make output buffer")
+        // Interleaved float32 stereo: the block buffer is [L R L R …].
+        while reader.status == .reading {
+            guard let sampleBuffer = output.copyNextSampleBuffer() else { break }
+            guard let block = CMSampleBufferGetDataBuffer(sampleBuffer) else { continue }
+            let length = CMBlockBufferGetDataLength(block)
+            let frames = length / (2 * MemoryLayout<Float>.size)
+            guard frames > 0 else { continue }
+            var bytes = [UInt8](repeating: 0, count: frames * 2 * MemoryLayout<Float>.size)
+            let copyStatus: OSStatus = bytes.withUnsafeMutableBytes { ptr in
+                CMBlockBufferCopyDataBytes(block, atOffset: 0, dataLength: ptr.count, destination: ptr.baseAddress!)
             }
-            var convertError: NSError?
-            let status = converter.convert(to: outBuf, error: &convertError, withInputFrom: inputBlock)
-            if let e = inputError {
-                throw AppError.fileError("Read failed: \(e.localizedDescription)")
-            }
-            if status == .error {
-                throw AppError.fileError(convertError?.localizedDescription ?? "Conversion failed")
-            }
-            let frames = Int(outBuf.frameLength)
-            if frames > 0 {
-                emptyRuns = 0
-                if let channels = outBuf.floatChannelData {
-                    left.append(contentsOf: UnsafeBufferPointer(start: channels[0], count: frames))
-                    right.append(contentsOf: UnsafeBufferPointer(start: channels[1], count: frames))
-                }
-            } else if status == .haveData {
-                // The converter asked for more input but produced nothing.
-                // A few of these are normal (priming); hundreds means stuck.
-                emptyRuns += 1
-                if emptyRuns > 500 {
-                    throw AppError.fileError("Converter stalled after 500 empty pulls — the input may be unreadable")
+            guard copyStatus == noErr else { continue }
+            bytes.withUnsafeBytes { raw in
+                let f = raw.bindMemory(to: Float.self)
+                for i in 0..<frames {
+                    left.append(f[i * 2])
+                    right.append(f[i * 2 + 1])
                 }
             }
-            if status == .endOfStream { break }
         }
-        return (left, right)
-    }
-
-    /// Direct disk read for files already in the target layout
-    /// (stereo, target rate, float32 or int16). No converter, no stalls.
-    private static func readDirect(file: AVAudioFile) throws -> (left: [Float], right: [Float]) {
-        let fmt = file.processingFormat
-        var left = [Float]()
-        var right = [Float]()
-        let estimate = Int(file.length) + 1024
-        left.reserveCapacity(estimate)
-        right.reserveCapacity(estimate)
-        while true {
-            guard let buf = AVAudioPCMBuffer(pcmFormat: fmt, frameCapacity: 8192) else {
-                throw AppError.fileError("Could not make read buffer")
-            }
-            try file.read(into: buf)
-            let n = Int(buf.frameLength)
-            if n == 0 { break }
-            if fmt.commonFormat == .pcmFormatFloat32, let ch = buf.floatChannelData {
-                left.append(contentsOf: UnsafeBufferPointer(start: ch[0], count: n))
-                right.append(contentsOf: UnsafeBufferPointer(start: ch[1], count: n))
-            } else if fmt.commonFormat == .pcmFormatInt16, let ch = buf.int16ChannelData {
-                let s = Float(1.0 / 32768.0)
-                for i in 0..<n {
-                    left.append(Float(ch[0][i]) * s)
-                    right.append(Float(ch[1][i]) * s)
-                }
-            } else {
-                throw AppError.fileError("Unsupported direct-read format")
-            }
+        if reader.status == .failed {
+            throw AppError.fileError("Read failed for \(url.lastPathComponent): \(reader.error?.localizedDescription ?? "unknown error")")
+        }
+        if reader.status == .cancelled {
+            throw AppError.cancelled
         }
         return (left, right)
     }

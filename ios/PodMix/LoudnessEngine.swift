@@ -121,8 +121,8 @@ enum LoudnessEngine {
 
     /// Reads `url`, normalizes to `preset`, writes a temp .m4a, returns it
     /// plus the measurement for display.
-    static func normalizedFile(from url: URL, preset: LevelPreset) throws -> (url: URL, measuredLUFS: Double, appliedGainDB: Double) {
-        var (left, right) = try AudioIO.readStereoFloat(url: url)
+    static func normalizedFile(from url: URL, preset: LevelPreset) async throws -> (url: URL, measuredLUFS: Double, appliedGainDB: Double) {
+        var (left, right) = try await AudioIO.readStereoFloat(url: url)
         let result = normalize(left: &left, right: &right,
                                targetLUFS: preset.targetLUFS,
                                ceilingDBTP: preset.ceilingDBTP)

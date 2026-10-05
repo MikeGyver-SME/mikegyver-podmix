@@ -94,7 +94,7 @@ struct LevelView: View {
         resultText = ""
         Task.detached {
             do {
-                var (left, right) = try AudioIO.readStereoFloat(url: url)
+                var (left, right) = try await AudioIO.readStereoFloat(url: url)
                 await MainActor.run { statusText = "Applying gain + limiter…" }
                 let result = LoudnessEngine.normalize(left: &left, right: &right,
                                                       targetLUFS: target.targetLUFS,

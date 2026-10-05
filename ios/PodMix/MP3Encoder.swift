@@ -11,9 +11,9 @@ enum MP3Encoder {
     /// so a stall is localizable from the UI.
     static func encode(inputURL: URL, outputURL: URL, bitrateKbps: Int,
                        phase: @escaping (String) -> Void = { _ in },
-                       progress: @escaping (Double) -> Void) throws {
+                       progress: @escaping (Double) -> Void) async throws {
         phase("Reading audio…")
-        let (leftF, rightF) = try AudioIO.readStereoFloat(url: inputURL, targetSampleRate: 44100)
+        let (leftF, rightF) = try await AudioIO.readStereoFloat(url: inputURL, targetSampleRate: 44100)
         let frames = min(leftF.count, rightF.count)
         guard frames > 0 else { throw AppError.lameFailed("No audio samples in \(inputURL.lastPathComponent)") }
 

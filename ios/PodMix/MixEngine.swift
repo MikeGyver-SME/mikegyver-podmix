@@ -19,20 +19,38 @@ enum MixEngine {
         let range: CMTimeRange
     }
 
+    /// Builds the mix. Raw system errors are wrapped with the stage they
+    /// failed in — a bare `Foundation._GenericObjCError error 0` tells you
+    /// nothing unless you know whether it was the voice read, the music
+    /// read, or the composition step.
     static func build(voiceURL: URL, musicURL: URL, settings: MixSettings) async throws -> Mixed {
+        var stage = "starting"
+        do {
+            return try await buildInner(voiceURL: voiceURL, musicURL: musicURL, settings: settings, stage: &stage)
+        } catch let error as AppError {
+            throw error
+        } catch {
+            throw AppError.exportFailed("Mix failed (\(stage)): \(error.localizedDescription)")
+        }
+    }
+
+    private static func buildInner(voiceURL: URL, musicURL: URL, settings: MixSettings, stage: inout String) async throws -> Mixed {
         // Optional: normalize the voice track first (Mike's podcast preset).
+        stage = "leveling voice"
         var voiceSource = voiceURL
         if let preset = settings.voiceLevel.preset {
-            let result = try LoudnessEngine.normalizedFile(from: voiceURL, preset: preset)
+            let result = try await LoudnessEngine.normalizedFile(from: voiceURL, preset: preset)
             voiceSource = result.url
         }
 
+        stage = "loading voice tracks"
         let voiceAsset = AVURLAsset(url: voiceSource)
         let voiceAudioTracks = try await voiceAsset.loadTracks(withMediaType: .audio)
         guard let voiceAudio = voiceAudioTracks.first else { throw AppError.noAudioTrack }
         let duration = try await voiceAsset.load(.duration)
         guard CMTimeGetSeconds(duration) > 0.1 else { throw AppError.fileError("Voice source has no duration") }
 
+        stage = "building composition"
         let composition = AVMutableComposition()
         guard let videoTrack = composition.addMutableTrack(withMediaType: .video,
                                                           preferredTrackID: kCMPersistentTrackID_Invalid),
@@ -58,6 +76,7 @@ enum MixEngine {
         try voiceTrack.insertTimeRange(fullRange, of: voiceAudio, at: .zero)
 
         // Music looped (or trimmed) to the voice duration.
+        stage = "loading music"
         let musicAsset = AVURLAsset(url: musicURL)
         let musicAudioTracks = try await musicAsset.loadTracks(withMediaType: .audio)
         guard let musicAudio = musicAudioTracks.first else { throw AppError.noAudioTrack }
@@ -71,11 +90,12 @@ enum MixEngine {
         }
 
         // Audio mix: voice flat, music follows the envelope.
+        stage = "building music envelope"
         let mix = AVMutableAudioMix()
         let voiceParams = AVMutableAudioMixInputParameters(track: voiceTrack)
         voiceParams.setVolume(1.0, at: .zero)
         let musicParams = AVMutableAudioMixInputParameters(track: musicTrack)
-        let ramps = try musicEnvelope(voiceURL: voiceSource, duration: duration, settings: settings)
+        let ramps = try await musicEnvelope(voiceURL: voiceSource, duration: duration, settings: settings)
         for ramp in ramps {
             musicParams.setVolumeRamp(fromStartVolume: ramp.from, toEndVolume: ramp.to, timeRange: ramp.range)
         }
@@ -105,7 +125,7 @@ enum MixEngine {
 
     /// Piecewise-linear music volume curve: base level with ease-in/out
     /// fades, dipped wherever the voice is loud (best-effort ducking).
-    static func musicEnvelope(voiceURL: URL, duration: CMTime, settings: MixSettings) throws -> [VolumeRamp] {
+    static func musicEnvelope(voiceURL: URL, duration: CMTime, settings: MixSettings) async throws -> [VolumeRamp] {
         let totalSeconds = CMTimeGetSeconds(duration)
         let step = 0.1
         let count = max(1, Int((totalSeconds / step).rounded(.up)))
@@ -130,7 +150,7 @@ enum MixEngine {
 
         // Ducking: dip the bed where the voice RMS clears −35 dBFS.
         if settings.duckingEnabled {
-            let (left, right) = try AudioIO.readStereoFloat(url: voiceURL)
+            let (left, right) = try await AudioIO.readStereoFloat(url: voiceURL)
             let n = min(left.count, right.count)
             let windowSamples = Int(48000 * step)
             let dip = Float(settings.musicVolume * 0.3)
