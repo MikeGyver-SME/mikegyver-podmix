@@ -19,11 +19,10 @@ enum TitleCard {
 
     /// Renders the card and writes it as an H.264 MP4 of exactly `duration`.
     static func makeVideo(duration: CMTime, title: String) async throws -> URL {
-        let image = render(title: title)
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("titlecard-\(UUID().uuidString)")
             .appendingPathExtension("mp4")
-        try await write(image: image, duration: duration, to: url)
+        try await write(title: title, duration: duration, to: url)
         return url
     }
 
@@ -35,61 +34,59 @@ enum TitleCard {
             .trimmingCharacters(in: .whitespaces)
     }
 
-    // MARK: - Rendering
+    // MARK: - Card drawing
 
-    private static func render(title: String) -> UIImage {
+    /// Draws the card into `ctx`, which must already be flipped to UIKit
+    /// (top-left origin) coordinates.
+    private static func drawCard(_ ctx: CGContext, title: String) {
         let size = CGSize(width: width, height: height)
-        return UIGraphicsImageRenderer(size: size).image { _ in
-            guard let ctx = UIGraphicsGetCurrentContext() else { return }
-            // Background.
-            ctx.setFillColor(navy.cgColor)
-            ctx.fill(CGRect(origin: .zero, size: size))
-            // Gold rules.
-            ctx.setFillColor(gold.cgColor)
-            ctx.fill(CGRect(x: 120, y: 96, width: size.width - 240, height: 6))
-            ctx.fill(CGRect(x: 120, y: size.height - 102, width: size.width - 240, height: 6))
+        // Background.
+        ctx.setFillColor(navy.cgColor)
+        ctx.fill(CGRect(origin: .zero, size: size))
+        // Gold rules.
+        ctx.setFillColor(gold.cgColor)
+        ctx.fill(CGRect(x: 120, y: 96, width: size.width - 240, height: 6))
+        ctx.fill(CGRect(x: 120, y: size.height - 102, width: size.width - 240, height: 6))
 
-            let centerX = size.width / 2
-            // Studio wordmark.
-            let wordmark = NSAttributedString(
-                string: "MIKEGYVER STUDIO",
-                attributes: [
-                    .font: UIFont.systemFont(ofSize: 64, weight: .bold),
-                    .foregroundColor: gold,
-                    .kern: 14
-                ])
-            let wSize = wordmark.size()
-            wordmark.draw(at: CGPoint(x: centerX - wSize.width / 2, y: 170))
+        let centerX = size.width / 2
+        // Studio wordmark.
+        let wordmark = NSAttributedString(
+            string: "MIKEGYVER STUDIO",
+            attributes: [
+                .font: UIFont.systemFont(ofSize: 64, weight: .bold),
+                .foregroundColor: gold,
+                .kern: 14
+            ])
+        let wSize = wordmark.size()
+        wordmark.draw(at: CGPoint(x: centerX - wSize.width / 2, y: 170))
 
-            // Episode title, wrapped.
-            let paragraph = NSMutableParagraphStyle()
-            paragraph.alignment = .center
-            paragraph.lineBreakMode = .byWordWrapping
-            let titleAttr = NSAttributedString(
-                string: title,
-                attributes: [
-                    .font: UIFont.systemFont(ofSize: 104, weight: .bold),
-                    .foregroundColor: UIColor.white,
-                    .paragraphStyle: paragraph
-                ])
-            let titleRect = CGRect(x: 140, y: 400, width: size.width - 280, height: 480)
-            titleAttr.draw(in: titleRect)
+        // Episode title, wrapped.
+        let paragraph = NSMutableParagraphStyle()
+        paragraph.alignment = .center
+        paragraph.lineBreakMode = .byWordWrapping
+        let titleAttr = NSAttributedString(
+            string: title,
+            attributes: [
+                .font: UIFont.systemFont(ofSize: 104, weight: .bold),
+                .foregroundColor: UIColor.white,
+                .paragraphStyle: paragraph
+            ])
+        titleAttr.draw(in: CGRect(x: 140, y: 400, width: size.width - 280, height: 480))
 
-            // Tagline.
-            let tagline = NSAttributedString(
-                string: "Sharing is Caring",
-                attributes: [
-                    .font: UIFont.systemFont(ofSize: 52, weight: .medium),
-                    .foregroundColor: gold.withAlphaComponent(0.85)
-                ])
-            let tSize = tagline.size()
-            tagline.draw(at: CGPoint(x: centerX - tSize.width / 2, y: size.height - 230))
-        }
+        // Tagline.
+        let tagline = NSAttributedString(
+            string: "Sharing is Caring",
+            attributes: [
+                .font: UIFont.systemFont(ofSize: 52, weight: .medium),
+                .foregroundColor: gold.withAlphaComponent(0.85)
+            ])
+        let tSize = tagline.size()
+        tagline.draw(at: CGPoint(x: centerX - tSize.width / 2, y: size.height - 230))
     }
 
     // MARK: - Video writing
 
-    private static func write(image: UIImage, duration: CMTime, to url: URL) async throws {
+    private static func write(title: String, duration: CMTime, to url: URL) async throws {
         let writer = try AVAssetWriter(outputURL: url, fileType: .mp4)
         let videoSettings: [String: Any] = [
             AVVideoCodecKey: AVVideoCodecType.h264,
@@ -132,10 +129,10 @@ enum TitleCard {
                         cont.resume(throwing: fail("no pixel buffer pool"))
                         return
                     }
-                    pixelBuffer = rasterize(image: image, pool: pool)
+                    pixelBuffer = rasterize(title: title, pool: pool)
                     if pixelBuffer == nil {
                         if !finished { finished = true; input.markAsFinished(); writer.cancelWriting() }
-                        cont.resume(throwing: fail("could not rasterize image"))
+                        cont.resume(throwing: fail("could not rasterize card"))
                         return
                     }
                 }
@@ -166,12 +163,14 @@ enum TitleCard {
         }
     }
 
-    /// Draws the UIImage into a 32ARGB pixel buffer from the adaptor's pool.
-    private static func rasterize(image: UIImage, pool: CVPixelBufferPool) -> CVPixelBuffer? {
+    /// Renders the card directly into a pool pixel buffer: one flip to UIKit
+    /// coordinates, then pure UIKit drawing. No intermediate UIImage/CGImage
+    /// handoff, so there is no orientation ambiguity — v1.0.3 rendered via a
+    /// UIImage and came out upside down on device.
+    private static func rasterize(title: String, pool: CVPixelBufferPool) -> CVPixelBuffer? {
         var pb: CVPixelBuffer?
         guard CVPixelBufferPoolCreatePixelBuffer(kCFAllocatorDefault, pool, &pb) == kCVReturnSuccess,
-              let pixelBuffer = pb,
-              let cgImage = image.cgImage else { return nil }
+              let pixelBuffer = pb else { return nil }
         CVPixelBufferLockBaseAddress(pixelBuffer, [])
         defer { CVPixelBufferUnlockBaseAddress(pixelBuffer, []) }
         guard let ctx = CGContext(
@@ -181,10 +180,11 @@ enum TitleCard {
             bytesPerRow: CVPixelBufferGetBytesPerRow(pixelBuffer),
             space: CGColorSpaceCreateDeviceRGB(),
             bitmapInfo: CGImageAlphaInfo.noneSkipFirst.rawValue) else { return nil }
-        // Core Graphics is bottom-left origin; the pixel buffer is top-left.
+        // Core Graphics is bottom-left origin; the video frame is top-left.
+        // Exactly one flip, then UIKit drawing methods draw upright.
         ctx.translateBy(x: 0, y: CGFloat(height))
         ctx.scaleBy(x: 1, y: -1)
-        ctx.draw(cgImage, in: CGRect(x: 0, y: 0, width: width, height: height))
+        drawCard(ctx, title: title)
         return pixelBuffer
     }
 }

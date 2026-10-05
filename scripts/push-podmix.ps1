@@ -4,14 +4,14 @@
   TestFlight build workflow).
 
 .DESCRIPTION
-  1. Uses the extracted podmix-v1.0.3\podmix folder as the source of truth.
+  1. Uses the extracted podmix-v1.0.4\podmix folder as the source of truth.
   2. Clones MikeGyver-SME/mikegyver-podmix if needed (else pulls main).
   3. Copies the source in, commits, pushes.
   4. Creates and pushes the version tag -> the "Build and upload PodMix to
      TestFlight" workflow starts automatically on the tag push.
 
 .PARAMETER SourceDir
-  The extracted source folder. Defaults to E:\Downloads when it exists, else your shell Downloads folder\podmix-v1.0.3\podmix
+  The extracted source folder. Defaults to E:\Downloads when it exists, else your shell Downloads folder\podmix-v1.0.4\podmix
   (resolved via the Windows shell, so relocated Downloads folders work).
 
 .PARAMETER RepoDir
@@ -30,16 +30,16 @@
   powershell -ExecutionPolicy Bypass -File .\push-podmix.ps1 -Tag v1.0.1
 #>
 param(
-    [string]$SourceDir = (Join-Path (& { if (Test-Path 'E:\Downloads') { 'E:\Downloads' } else { try { (New-Object -ComObject Shell.Application).NameSpace('shell:Downloads').Self.Path } catch { "$env:USERPROFILE\Downloads" } } }) 'podmix-v1.0.3\podmix'),
+    [string]$SourceDir = (Join-Path (& { if (Test-Path 'E:\Downloads') { 'E:\Downloads' } else { try { (New-Object -ComObject Shell.Application).NameSpace('shell:Downloads').Self.Path } catch { "$env:USERPROFILE\Downloads" } } }) 'podmix-v1.0.4\podmix'),
     [string]$RepoDir   = (Join-Path $env:USERPROFILE 'source\repos\mikegyver-podmix'),
-    [string]$Tag       = 'v1.0.3'
+    [string]$Tag       = 'v1.0.4'
 )
 
 $ErrorActionPreference = 'Stop'
 $RepoSlug = 'MikeGyver-SME/mikegyver-podmix'
 
 if (-not (Test-Path $SourceDir)) {
-    throw "Source folder not found: $SourceDir`nExtract podmix-v1.0.3.zip first."
+    throw "Source folder not found: $SourceDir`nExtract podmix-v1.0.4.zip first."
 }
 
 # --- 1. Clone or update ------------------------------------------------------
