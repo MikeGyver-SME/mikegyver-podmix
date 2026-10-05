@@ -50,7 +50,8 @@ enum Exporter {
         case .cancelled:
             throw AppError.cancelled
         case .failed:
-            throw AppError.exportFailed(session.error?.localizedDescription ?? "unknown error")
+            let e = session.error as NSError?
+            throw AppError.exportFailed("code \(e?.code ?? -1): \(e?.localizedDescription ?? "unknown error")")
         default:
             throw AppError.exportFailed("unexpected status \(session.status.rawValue)")
         }

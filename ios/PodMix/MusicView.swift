@@ -22,6 +22,14 @@ struct MusicView: View {
         return "None"
     }
 
+    private var mixFooterText: String {
+        var text = "Ducking is best-effort: the bed dips where the voice RMS clears −35 dBFS. Voice leveling uses the approximate in-app loudness engine."
+        if builtMix?.isTitleCard == true {
+            text += "\n\nThe voice has no video, so the MP4 uses a branded MikeGyver Studio title card."
+        }
+        return text
+    }
+
     var body: some View {
         NavigationStack {
             Form {
@@ -88,7 +96,7 @@ struct MusicView: View {
                     Button("3. Export audio-only (.m4a)") { exportAudio() }
                         .disabled(builtMix == nil || isWorking)
                 } footer: {
-                    Text("Ducking is best-effort: the bed dips where the voice RMS clears −35 dBFS. Voice leveling uses the approximate in-app loudness engine.")
+                    Text(mixFooterText)
                 }
 
                 if isWorking {

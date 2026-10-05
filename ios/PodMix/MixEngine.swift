@@ -11,6 +11,8 @@ enum MixEngine {
         let videoComposition: AVVideoComposition?
         let audioMix: AVAudioMix
         let duration: CMTime
+        /// True when the voice had no video and a branded title card was synthesized.
+        let isTitleCard: Bool
     }
 
     struct VolumeRamp {
@@ -63,10 +65,27 @@ enum MixEngine {
 
         let fullRange = CMTimeRange(start: .zero, duration: duration)
 
-        // Video passes straight through.
+        // Video passes straight through — or, for an audio-only voice,
+        // a branded title card is synthesized so the MP4 export always
+        // has video to write (a video preset on an empty video track
+        // fails the export with "Operation Stopped").
+        stage = "preparing video"
+        let voiceVideoTracks = try await voiceAsset.loadTracks(withMediaType: .video)
+        let videoAsset: AVURLAsset
+        let isTitleCard: Bool
+        if voiceVideoTracks.isEmpty {
+            stage = "rendering title card"
+            let cardURL = try await TitleCard.makeVideo(duration: duration,
+                                                       title: TitleCard.prettyTitle(for: voiceURL))
+            videoAsset = AVURLAsset(url: cardURL)
+            isTitleCard = true
+        } else {
+            videoAsset = voiceAsset
+            isTitleCard = false
+        }
         var appliedTransform: CGAffineTransform?
         var appliedSize = CGSize.zero
-        if let sourceVideo = try await voiceAsset.loadTracks(withMediaType: .video).first {
+        if let sourceVideo = try await videoAsset.loadTracks(withMediaType: .video).first {
             try videoTrack.insertTimeRange(fullRange, of: sourceVideo, at: .zero)
             appliedTransform = try await sourceVideo.load(.preferredTransform)
             appliedSize = try await sourceVideo.load(.naturalSize)
@@ -120,7 +139,8 @@ enum MixEngine {
         return Mixed(composition: composition,
                      videoComposition: videoComposition,
                      audioMix: mix,
-                     duration: duration)
+                     duration: duration,
+                     isTitleCard: isTitleCard)
     }
 
     /// Piecewise-linear music volume curve: base level with ease-in/out
