@@ -182,9 +182,14 @@ enum TitleCard {
             bitmapInfo: CGImageAlphaInfo.noneSkipFirst.rawValue) else { return nil }
         // Core Graphics is bottom-left origin; the video frame is top-left.
         // Exactly one flip, then UIKit drawing methods draw upright.
+        // NOTE: NSAttributedString.draw finds its context via
+        // UIGraphicsGetCurrentContext(), so the raw CGContext must be pushed
+        // or the text silently draws nothing (v1.0.4's missing-text bug).
         ctx.translateBy(x: 0, y: CGFloat(height))
         ctx.scaleBy(x: 1, y: -1)
+        UIGraphicsPushContext(ctx)
         drawCard(ctx, title: title)
+        UIGraphicsPopContext()
         return pixelBuffer
     }
 }
